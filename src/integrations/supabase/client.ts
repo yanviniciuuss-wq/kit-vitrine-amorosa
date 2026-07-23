@@ -58,6 +58,22 @@ function createSupabaseClient() {
 
 let _supabase: ReturnType<typeof createSupabaseClient> | undefined;
 
+// Returns true when the required Supabase env vars are present.
+// Never throws — safe to call during render to guard the UI.
+export function isSupabaseConfigured(): boolean {
+  const url = import.meta.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+  const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+  return Boolean(url && key);
+}
+
+// Lazily creates and returns the Supabase client.
+// Throws a clear error if env vars are missing — always wrap calls in try/catch
+// or guard with isSupabaseConfigured() first.
+export function getSupabase(): ReturnType<typeof createSupabaseClient> {
+  if (!_supabase) _supabase = createSupabaseClient();
+  return _supabase;
+}
+
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
 export const supabase = new Proxy({} as ReturnType<typeof createSupabaseClient>, {

@@ -12,8 +12,9 @@ import { Switch } from "@/components/ui/switch";
 import { supabase } from "@/integrations/supabase/client";
 import { useSession, useRoles } from "@/lib/use-session";
 import { toast } from "sonner";
-import { ExternalLink, LogOut, Plus, ShoppingBag, Trash2 } from "lucide-react";
+import { ExternalLink, LogOut, Plus, ShoppingBag, Trash2, Receipt } from "lucide-react";
 import { formatBRL } from "@/lib/cart";
+import { Badge } from "@/components/ui/badge";
 
 export const Route = createFileRoute("/dashboard")({
   ssr: false,
@@ -115,10 +116,12 @@ function StoreManager({ store, onChange }: { store: Store; onChange: (s: Store) 
       <TabsList>
         <TabsTrigger value="products">Produtos</TabsTrigger>
         <TabsTrigger value="categories">Categorias</TabsTrigger>
+        <TabsTrigger value="orders">Pedidos</TabsTrigger>
         <TabsTrigger value="settings">Loja</TabsTrigger>
       </TabsList>
       <TabsContent value="products"><ProductsPanel store={store} /></TabsContent>
       <TabsContent value="categories"><CategoriesPanel store={store} /></TabsContent>
+      <TabsContent value="orders"><OrdersPanel store={store} /></TabsContent>
       <TabsContent value="settings"><SettingsPanel store={store} onChange={onChange} /></TabsContent>
     </Tabs>
   );
@@ -251,6 +254,127 @@ function ProductsPanel({ store }: { store: Store }) {
         </Table>
       </CardContent>
     </Card>
+  );
+}
+
+type OrderRow = {
+  id: string;
+  created_at: string;
+  total: number;
+  status: string;
+  customer_name: string | null;
+  customer_phone: string | null;
+  order_items: { id: string; name: string; price: number; quantity: number; note: string | null }[];
+};
+
+function statusBadge(status: string) {
+  if (status === "confirmed") return <Badge variant="secondary">Confirmado</Badge>;
+  if (status === "cancelled") return <Badge variant="destructive">Cancelado</Badge>;
+  return <Badge variant="default">Pendente</Badge>;
+}
+
+function OrdersPanel({ store }: { store: Store }) {
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    const { data } = await supabase
+      .from("orders")
+      .select("id, created_at, total, status, customer_name, customer_phone, order_items(id, name, price, quantity, note)")
+      .eq("store_id", store.id)
+      .order("created_at", { ascending: false });
+    setOrders((data ?? []) as OrderRow[]);
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, [store.id]);
+
+  async function updateStatus(id: string, status: string) {
+    const { error } = await supabase.from("orders").update({ status }).eq("id", id);
+    if (error) return toast.error(error.message);
+    toast.success("Status atualizado");
+    load();
+  }
+
+  async function del(id: string) {
+    if (!confirm("Excluir este pedido?")) return;
+    const { error } = await supabase.from("orders").delete().eq("id", id);
+    if (error) return toast.error(error.message);
+    toast.success("Pedido excluído");
+    load();
+  }
+
+  const totalRevenue = orders.filter((o) => o.status !== "cancelled").reduce((s, o) => s + Number(o.total), 0);
+  const pendingCount = orders.filter((o) => o.status === "pending").length;
+
+  return (
+    <div className="mt-4 space-y-4">
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card><CardContent className="p-6"><div className="text-sm text-muted-foreground">Total de pedidos</div><div className="mt-2 text-3xl font-bold">{orders.length}</div></CardContent></Card>
+        <Card><CardContent className="p-6"><div className="text-sm text-muted-foreground">Pedidos pendentes</div><div className="mt-2 text-3xl font-bold">{pendingCount}</div></CardContent></Card>
+        <Card><CardContent className="p-6"><div className="text-sm text-muted-foreground">Receita (confirmados)</div><div className="mt-2 text-3xl font-bold">{formatBRL(totalRevenue)}</div></CardContent></Card>
+      </div>
+
+      <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><Receipt className="h-5 w-5" /> Histórico de pedidos recebidos</CardTitle></CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="py-8 text-center text-muted-foreground">Carregando...</div>
+          ) : orders.length === 0 ? (
+            <div className="py-8 text-center text-muted-foreground">Nenhum pedido recebido ainda.</div>
+          ) : (
+            <div className="divide-y">
+              {orders.map((o) => (
+                <div key={o.id} className="py-3">
+                  <button
+                    className="flex w-full items-center justify-between gap-2 text-left"
+                    onClick={() => setExpanded(expanded === o.id ? null : o.id)}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div>
+                        <div className="font-medium">{new Date(o.created_at).toLocaleString("pt-BR")}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {o.order_items.length} {o.order_items.length === 1 ? "item" : "itens"}
+                          {o.customer_name ? ` · ${o.customer_name}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {statusBadge(o.status)}
+                      <div className="font-bold">{formatBRL(Number(o.total))}</div>
+                    </div>
+                  </button>
+                  {expanded === o.id && (
+                    <div className="mt-3 space-y-2 rounded-md border p-3 bg-muted/30">
+                      {o.order_items.map((item) => (
+                        <div key={item.id} className="flex justify-between text-sm">
+                          <div>
+                            <span className="font-medium">{item.quantity}x</span> {item.name}
+                            {item.note && <div className="text-xs text-muted-foreground">Obs: {item.note}</div>}
+                          </div>
+                          <div className="text-muted-foreground">{formatBRL(Number(item.price) * item.quantity)}</div>
+                        </div>
+                      ))}
+                      <div className="flex flex-wrap gap-2 pt-2">
+                        {o.status !== "confirmed" && (
+                          <Button size="sm" variant="secondary" onClick={() => updateStatus(o.id, "confirmed")}>Confirmar</Button>
+                        )}
+                        {o.status !== "cancelled" && (
+                          <Button size="sm" variant="outline" onClick={() => updateStatus(o.id, "cancelled")}>Cancelar</Button>
+                        )}
+                        <Button size="sm" variant="ghost" onClick={() => del(o.id)}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 

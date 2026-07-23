@@ -103,13 +103,46 @@ function Storefront() {
 
 function CartSheet({ store, cart, primary }: { store: Store; cart: ReturnType<typeof useCart>; primary: string }) {
   const [open, setOpen] = useState(false);
+  const [placing, setPlacing] = useState(false);
 
-  function checkout() {
+  async function checkout() {
     if (cart.items.length === 0) return;
     if (!store.whatsapp_number) return toast.error("Esta loja ainda não configurou o WhatsApp.");
+
+    setPlacing(true);
     const msg = buildWhatsAppMessage(store.name, cart.items, cart.total);
+
+    const { data: order, error } = await supabase.from("orders").insert({
+      store_id: store.id,
+      total: cart.total,
+      whatsapp_message: msg,
+    }).select().single();
+
+    if (error) {
+      setPlacing(false);
+      return toast.error("Não foi possível registrar o pedido. Tente novamente.");
+    }
+
+    const orderItems = cart.items.map((i) => ({
+      order_id: order.id,
+      product_id: i.productId,
+      name: i.name,
+      price: i.price,
+      quantity: i.quantity,
+      note: i.note ?? null,
+    }));
+
+    const { error: itemsError } = await supabase.from("order_items").insert(orderItems);
+    setPlacing(false);
+
+    if (itemsError) {
+      return toast.error("Pedido registrado, mas houve um erro ao salvar os itens.");
+    }
+
     const url = whatsappUrl(store.whatsapp_number, msg);
     window.open(url, "_blank");
+    cart.clear();
+    toast.success("Pedido registrado! Abrindo o WhatsApp...");
   }
 
   return (
@@ -145,8 +178,8 @@ function CartSheet({ store, cart, primary }: { store: Store; cart: ReturnType<ty
           <div className="flex justify-between items-center w-full text-lg font-bold">
             <span>Total</span><span>{formatBRL(cart.total)}</span>
           </div>
-          <Button className="w-full" style={{ background: primary }} disabled={cart.items.length === 0} onClick={checkout}>
-            Finalizar pedido no WhatsApp
+          <Button className="w-full" style={{ background: primary }} disabled={cart.items.length === 0 || placing} onClick={checkout}>
+            {placing ? "Registrando pedido..." : "Finalizar pedido no WhatsApp"}
           </Button>
           {cart.items.length > 0 && <Button variant="ghost" className="w-full" onClick={() => cart.clear()}>Limpar carrinho</Button>}
         </SheetFooter>
